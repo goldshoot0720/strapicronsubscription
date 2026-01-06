@@ -1,0 +1,86 @@
+name: Fetch Strapi Subscription
+
+on:
+  schedule:
+    # 每小時的第 55 分執行
+    - cron: "*/55 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fetch-subscription:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: "20"
+
+      - name: Install node-fetch
+        run: npm install node-fetch@3
+
+      - name: Fetch subscription from Strapi
+        env:
+          STRAPI_URL: ${{ secrets.STRAPI_URL }}
+          STRAPI_TOKEN: ${{ secrets.STRAPI_TOKEN }}
+        run: |
+          node --input-type=module -e '
+          import fetch from "node-fetch";
+          import fs from "fs";
+
+          // 注意：這裡假設你的 API ID 是 subscriptions (複數)
+          // 如果你的 Note 欄位包含圖片等複雜內容，可能不需要 ?populate=*，純文字則不用加
+          const url = `${process.env.STRAPI_URL}/api/subscriptions`;
+          const headers = { Authorization: `Bearer ${process.env.STRAPI_TOKEN}` };
+
+          console.log("Fetching from:", url);
+
+          try {
+            const res = await fetch(url, { headers });
+            if (!res.ok) throw new Error(`Fetch failed: ${res.status} ${res.statusText}`);
+
+            const data = await res.json();
+            
+            const subscriptions = (data.data || []).map(item => {
+              const attrs = item.attributes || {};
+              return {
+                id: item.id,
+                // 根據你提供的欄位進行對應 (請確認 Strapi 內部的欄位代號是否全為小寫)
+                name: attrs.name || "",
+                site: attrs.site || "",
+                price: attrs.price || 0,
+                account: attrs.account || "",
+                nextdate: attrs.nextdate || "",
+                note: attrs.note || "" // Markdown 通常是純字串，直接抓取即可
+              };
+            });
+
+            // 輸出檔名改為 subscription.json
+            fs.writeFileSync("subscription.json", JSON.stringify(subscriptions, null, 2));
+            console.log("subscription.json generated successfully.");
+          } catch (error) {
+            console.error("Error executing script:", error);
+            process.exit(1);
+          }
+          '
+
+      - name: Commit & push subscription.json
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+          
+          # 檢查 subscription.json 是否有變更
+          if [[ -n $(git status -s subscription.json) ]]; then
+            git add subscription.json
+            git commit -m "Update subscription.json [skip ci]"
+            git push
+            echo "Changes pushed to repository." 
+          else
+            echo "No changes in subscription.json, skipping commit."
+          fi
